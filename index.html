@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 쿼터뷰 퍼즐 게임 (카메라 회전 추가)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+        canvas { display: block; }
+
+        /* 여기서부터 추가 */
+        #ui-bar {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+        .block-btn {
+            cursor: grab;
+            border: 2px solid #ccc;
+            border-radius: 5px;
+        }
+        /* 블록 모양을 흉내낸 버튼들 */
+        #btn-red { background: #ff5555; width: 60px; height: 20px; margin-top: 20px; }
+        #btn-green { background: #55ff55; width: 20px; height: 60px; }
+        #btn-blue { background: #5555ff; width: 20px; height: 60px; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui-bar">
+        <!-- data-type으로 몇 번째 블록인지(0, 1, 2) 구분합니다 -->
+        <div class="block-btn" id="btn-red" draggable="true" data-type="0"></div>
+        <div class="block-btn" id="btn-green" draggable="true" data-type="1"></div>
+        <div class="block-btn" id="btn-blue" draggable="true" data-type="2"></div>
+    </div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { DragControls } from 'three/addons/controls/DragControls.js';
+        // 1. 카메라를 돌려줄 OrbitControls 모듈을 새로 불러옵니다.
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+
+        const aspect = window.innerWidth / window.innerHeight;
+        const d = 10;
+        const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+        camera.position.set(10, 10, 10); 
+        camera.lookAt(scene.position);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        // (기존) const gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0xdddddd);
+        // (수정) 3칸 크기로 변경
+        const gridHelper = new THREE.GridHelper(3, 3, 0x888888, 0xdddddd);
+        scene.add(gridHelper);
+
+        // 3가지 블록의 설계도 (색상과 크기)
+        const blockSpecs = [
+            { w: 3, h: 1, d: 1, color: 0xff5555 }, 
+            { w: 1, h: 1, d: 3, color: 0x55ff55 },  
+            { w: 1, h: 3, d: 1, color: 0x5555ff }  
+        ];
+
+        // 드래그 가능한 객체들을 담을 빈 배열만 남깁니다.
+        const draggableObjects = [];
+
+        // 위 배열을 돌면서 각각의 블록을 생성하고 화면에 추가
+        blockSpecs.forEach(spec => {
+            const geometry = new THREE.BoxGeometry(spec.w, spec.h, spec.d);
+            const material = new THREE.MeshLambertMaterial({ color: spec.color });
+            const mesh = new THREE.Mesh(geometry, material);
+            
+            mesh.position.set(spec.x, spec.h / 2, spec.z); // 높이의 절반만큼 올려야 바닥에 딱 맞음
+            
+            scene.add(mesh);
+            draggableObjects.push(mesh); // 드래그 대상 목록에 추가
+        });
+
+        // 2. OrbitControls (카메라 회전) 설정
+        const orbitControls = new OrbitControls(camera, renderer.domElement);
+        orbitControls.enableDamping = true; // 회전할 때 부드럽게 감속하는 효과(관성) 추가
+        orbitControls.dampingFactor = 0.05;
+        orbitControls.maxPolarAngle = Math.PI / 2 - 0.01; // 카메라가 땅바닥 밑으로 내려가지 않도록 제한
+        orbitControls.enablePan = false; // [추가] 우클릭 화면 밀기 방지!
+
+        // 2. 화면 아무 곳에나 다음 코드를 추가하세요 (우클릭 삭제 로직)
+        // --- [우클릭으로 블록 삭제하기] ---
+        window.addEventListener('contextmenu', (e) => {
+            e.preventDefault(); // 웹 브라우저의 기본 우클릭 메뉴 뜨는 것 방지
+
+            // 클릭한 위치 계산
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            // 레이저에 맞은 블록들 찾기
+            const intersects = raycaster.intersectObjects(draggableObjects);
+
+            if (intersects.length > 0) {
+                const targetBlock = intersects[0].object; // 가장 먼저 맞은 블록
+                
+                // 화면에서 지우기
+                scene.remove(targetBlock);
+                
+                // 드래그 가능한 목록에서 빼기
+                const index = draggableObjects.indexOf(targetBlock);
+                if (index > -1) {
+                    draggableObjects.splice(index, 1);
+                }
+
+                // 메모리 완전 삭제 (게임 최적화)
+                targetBlock.geometry.dispose();
+                targetBlock.material.dispose();
+            }
+        });
+
+        const dragControls = new DragControls(draggableObjects, camera, renderer.domElement);
+
+        dragControls.addEventListener('drag', function (event) {
+            const movingObj = event.object;
+
+            // 1. X, Z축 스냅 (가로, 세로)
+            movingObj.position.x = Math.round(movingObj.position.x);
+            movingObj.position.z = Math.round(movingObj.position.z);
+
+            // 2. Y축(높이) 스냅 - 공중에 뜰 수 있도록 허용!
+            // 블록의 중심이 0.5, 1.5, 2.5 단위로 떨어져야 바닥이나 칸에 정확히 맞습니다.
+            movingObj.position.y = Math.round(movingObj.position.y - 0.5) + 0.5;
+
+            // 3. 지하로 꺼짐 방지
+            // 공중에 뜨는 건 좋지만, 바닥 뚫고 밑으로 내려가면 안 되므로 최소 높이를 제한합니다.
+            const minHeight = movingObj.geometry.parameters.height / 2;
+            if (movingObj.position.y < minHeight) {
+                movingObj.position.y = minHeight;
+            }
+        });
+
+        // 3. 충돌 방지: 블록을 조작할 때는 카메라를 멈춥니다.
+        dragControls.addEventListener('dragstart', function (event) {
+            orbitControls.enabled = false; // 카메라 회전 잠금!
+            event.object.material.emissive.setHex(0x333333);
+        });
+
+        // 4. 충돌 방지: 블록을 놓으면 카메라를 다시 움직일 수 있게 풀어줍니다.
+        dragControls.addEventListener('dragend', function (event) {
+            orbitControls.enabled = true; // 카메라 회전 잠금 해제!
+            event.object.material.emissive.setHex(0x000000);
+        });
+
+        // --- [드래그 앤 드롭으로 블록 소환하기] ---
+        const dropPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // Y=0 인 투명한 바닥
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // 1. UI 버튼을 잡을 때 어떤 블록인지 기억하기
+        document.querySelectorAll('.block-btn').forEach(btn => {
+            btn.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('blockType', e.target.getAttribute('data-type'));
+            });
+        });
+
+        // 2. 3D 화면 위에 마우스를 올릴 수 있게 허용
+        renderer.domElement.addEventListener('dragover', (e) => {
+            e.preventDefault(); 
+        });
+
+        // 3. 화면에 놓았을 때(Drop) 블록 생성
+        renderer.domElement.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const blockType = e.dataTransfer.getData('blockType');
+            if (!blockType) return;
+
+            const spec = blockSpecs[blockType];
+
+            // 마우스 좌표를 3D 공간용 비율(-1 ~ +1)로 변환
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+            // 카메라에서 마우스 위치로 레이저 발사
+            raycaster.setFromCamera(mouse, camera);
+            const intersectPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(dropPlane, intersectPoint); // 바닥과 만나는 점 계산
+
+            if (intersectPoint) {
+                // 새로운 블록 생성
+                const geometry = new THREE.BoxGeometry(spec.w, spec.h, spec.d);
+                const material = new THREE.MeshLambertMaterial({ color: spec.color });
+                const newBlock = new THREE.Mesh(geometry, material);
+
+                // 마우스가 떨어진 위치를 반올림해서 격자에 맞춤
+                newBlock.position.x = Math.round(intersectPoint.x);
+                newBlock.position.z = Math.round(intersectPoint.z);
+                newBlock.position.y = spec.h / 2; // 바닥 높이에 맞춤
+
+                scene.add(newBlock);
+                draggableObjects.push(newBlock); // 움직일 수 있는 배열에 추가
+                
+                // [추가할 코드] 블록을 하나 놓을 때마다 퍼즐이 완성되었는지 확인!
+                if (checkPuzzleClear()) {
+                    setTimeout(() => alert("🎉 축하합니다! 퍼즐을 완성했습니다! 🎉"), 100);
+                }
+            }
+        });
+
+        // --- [퍼즐 클리어 확인 로직] ---
+        function checkPuzzleClear() {
+            const gridSize = 3;
+            // 3x3x3 = 27칸의 공간을 모두 false(비어있음)로 초기화
+            const grid = Array.from({ length: gridSize }, () =>
+                Array.from({ length: gridSize }, () =>
+                    Array.from({ length: gridSize }, () => false)
+                )
+            );
+
+            let totalVolume = 0; // 화면에 있는 블록의 총 부피(칸 수)
+
+            for (const block of draggableObjects) {
+                // 블록의 가로, 높이, 깊이 정보 가져오기
+                const w = Math.round(block.geometry.parameters.width);
+                const h = Math.round(block.geometry.parameters.height);
+                const d = Math.round(block.geometry.parameters.depth);
+                
+                totalVolume += (w * h * d); // 총 부피 누적
+
+                // 블록의 중심 좌표 (퍼즐판의 중심이 0,0,0 이라고 가정)
+                // 3x3 격자의 인덱스(0,1,2)로 변환하기 위해 오프셋(offset) 적용
+                const cx = Math.round(block.position.x);
+                const cy = Math.round(block.position.y - 0.5); // Y축은 0.5부터 시작하므로
+                const cz = Math.round(block.position.z);
+
+                // 블록이 차지하는 공간(칸)을 grid 배열에 표시 (true)
+                const startX = cx - Math.floor(w / 2);
+                const startY = cy; // Y는 맨 아래가 기준이 됨
+                const startZ = cz - Math.floor(d / 2);
+
+                for (let x = 0; x < w; x++) {
+                    for (let y = 0; y < h; y++) {
+                        for (let z = 0; z < d; z++) {
+                            const gridX = startX + x + 1; // 중심을 기준으로 인덱스 0~2로 보정
+                            const gridY = startY + y;
+                            const gridZ = startZ + z + 1;
+                            
+                            // 블록이 3x3x3 범위를 벗어났다면 무효 (클리어 실패)
+                            if (gridX < 0 || gridX >= gridSize || gridY < 0 || gridY >= gridSize || gridZ < 0 || gridZ >= gridSize) {
+                                return false; 
+                            }
+                            
+                            // 이미 다른 블록이 있는 자리를 침범했다면(겹침) 무효
+                            if (grid[gridX][gridY][gridZ]) {
+                                return false; 
+                            }
+                            
+                            // 해당 칸을 채움
+                            grid[gridX][gridY][gridZ] = true;
+                        }
+                    }
+                }
+            }
+
+            // 모든 블록이 정상적으로 3x3x3 안에 들어갔더라도, 총 부피가 27칸이 안되면 덜 채운 것
+            if (totalVolume !== 27) return false;
+
+            // 위 조건을 모두 통과하고 27칸이 꽉 찼다면 클리어!
+            return true;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            // 5. 부드러운 카메라 회전(Damping)을 위해 매 프레임마다 업데이트 해줍니다.
+            orbitControls.update(); 
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -d * aspect;
+            camera.right = d * aspect;
+            camera.top = d;
+            camera.bottom = -d;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
